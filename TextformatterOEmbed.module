@@ -1,0 +1,368 @@
+<?php
+
+require_once 'lib/essence/bootstrap.php';
+
+/**
+ * ProcessWire Textformatter-oEmbed
+ *
+ * Looks for a bunch of URLs and and automatically converts them to embeds using the respective oembed APIs
+ * For a list of supported providers have a look at the essence repository: https://github.com/felixgirault/essence
+ *
+ * ProcessWire 2.x 
+ * Copyright (C) 2012 by Ryan Cramer 
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ * 
+ * http://processwire.com
+ *
+ *
+ */
+
+
+class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
+
+	public static function getModuleInfo() {
+		
+		return array(
+			'title' => __('Textformatter OEmbed', __FILE__), 
+			'version' => 100, 
+			'summary' => __('Enter a full Link (i.e <a href="https://twitter.com/neuwaerts_de/status/474431534124892160">https://twitter.com/neuwaerts_de/status/474431534124892160</a>) to a post or video at one of the supported services and it will automatically be converted to an embedded item. This formatter is intended to be run on trusted input.', __FILE__),
+			'author' => 'Felix Wahner',
+			'href' => 'http://modules.processwire.com/modules/textformatter-oembed/'
+		);
+
+	}
+
+	const dbTableName = 'textformatter_oembed';
+
+
+	// @TODO: Add config setting for monkey-patching curl_setopt 
+	// (CURLOPT_SSL_VERIFYPEER) in lib/essence/Essence/Http/Client/Curl.php
+	// this enables oEmbed for https-urls behind firewalls (great for testing purposes)
+
+	protected static $configDefaults = array(
+		'maxWidth' => 640, 
+		'maxHeight' => 480,
+		'wrapperClass' => 'pw-oembed',
+		'responsive' => 1
+	); 
+
+
+	/**
+	 * Data as used by the get/set functions
+	 *
+	 */
+	protected $data = array();
+
+	/**
+	 * essence lib
+	 *
+	 */
+	protected $essence = null;
+
+	/**
+	 * essence lib providers
+	 *
+	 */
+	 protected $providers = null;	
+
+
+	/**
+	 * Construct our module, set config defaults
+	 *
+	 */
+	public function __construct() {
+		
+		foreach(self::$configDefaults as $key => $value) {
+			$this->set($key, $value); 
+		}
+		
+	}
+
+
+	/**
+	 * Set our configuration defaults, initalize Essence Library
+	 *
+	 */	
+    public function init() {
+
+		$this->loadProviders();
+
+		if(!$this->providers) {
+			throw new WireException("Providers couldn't be read. Maybe there are files missing?"); 
+		}
+		if( !$this->providers ) {
+			$this->essence = Essence\Essence::instance();
+		} else {
+			$this->essence = Essence\Essence::instance($this->providers);
+		}
+
+    }
+
+	/**
+	 * 	Given an url return the corresponding embed code.
+	 *
+	 * 	A cached version of the embed code will be used if possible. When not possible, 
+	 * 	it will be retrieved from the service's oembed URL, and then cached. 
+	 *
+	 *  @param String $url the url to get the embed code for
+	 *  @return String the Embedcode or null if empty
+	 *
+	 */
+	protected function getEmbedCode( $url ) {
+
+		$db = wire('db'); 
+
+		$embedCode = null;
+
+		$itemID = $db->escape_string( $url ); 
+		$result = $db->query("SELECT embed_code, item_service, item_type FROM " . self::dbTableName . " WHERE item_id='$itemID'"); 
+
+		if($result->num_rows) {
+
+			list($embedCode,$itemService,$itemType) = $result->fetch_row(); 
+
+		} else {
+
+			$embed = $this->essence->embed( $url , [
+			    'maxwidth' => $this->maxWidth,
+			    'maxheight' => $this->maxHeight
+			]);
+
+			$embedCode = $embed->html;
+
+			if( !$embedCode ) return;
+			
+			$itemType = strtolower($embed->type);
+			$itemService = strtolower($db->escape_string($embed->providerName));
+
+			$sql = 	"INSERT INTO " . self::dbTableName . " SET " . 
+					"item_id='$itemID', " .
+					"item_service='$itemService', "  .
+					"item_type='$itemType', "  .
+					"embed_code='" . $db->escape_string($embedCode) . "', " . 
+					"created=NOW() ";
+
+			$db->query($sql);
+
+			$result->free();
+
+		}
+
+		// wrap it like it's hot.
+		$embedCode = $this->addWrapper($embedCode, $itemService, $itemType);
+
+		return $embedCode; 
+
+	}
+
+	/*
+	 * Loads providers for essence, adds custom providers if valid ones are given.
+	 *
+	 */
+
+	protected function loadProviders() {
+
+		if ( !is_string( ESSENCE_DEFAULT_PROVIDERS ) || !file_exists( ESSENCE_DEFAULT_PROVIDERS )) return;
+
+		$tmpProviders = include ESSENCE_DEFAULT_PROVIDERS;
+
+		if(!is_array($tmpProviders)) return;
+		
+		$addedProviders = (array)json_decode($this->customProviders, true);
+		
+		if(!count($addedProviders)) return $this->providers = [ 'providers' => $tmpProviders ];
+
+		foreach( $addedProviders as $provider => $providerObj ) {
+			$tmpProviders = array_merge($tmpProviders, $providerObj);
+		}
+
+		return $this->providers = [ 'providers' => $tmpProviders ];
+
+	}
+
+	/**
+	 * Adds a Wrapper with BEM-style classes to the embed code
+	 *
+	 * @param  String $embedCode the embed-code to wrap
+	 * @param  String $itemService the services name (i.e. twitter, instagram, [...])
+	 * @param  String $itemType the embed type (one of photo, video, link)
+	 * 
+	 * @return  String $out The wrapped embed code
+	 */
+	protected function addWrapper($embedCode, $itemService, $itemType) {
+		$out = 	'<div class="'.$this->wrapperClass.' '.$this->wrapperClass.'--'.$itemService.' '.$this->wrapperClass.'--'.$itemType.'">';
+		$out .= '	<div class="'.$this->wrapperClass.'__inner '.$this->wrapperClass.'_inner--'.$itemService.' '.$this->wrapperClass.'_inner--'.$itemType.'">';
+		$out .=	'		<div>'.$embedCode.'</div>';
+		$out .=	'	</div>';
+		$out .=	'</div>';
+
+		return $out;
+	}
+
+	/**
+	 * Adds responsive video css
+	 * @returns string the responsive video markup
+	 *
+	 */
+	protected function addResponsiveVideoStyles() {
+
+		$out  = '';
+		$out .= '.' . $this->wrapperClass . '--video { position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; height: auto; }';
+		$out .= '.' . $this->wrapperClass . '--video iframe, .' . $this->wrapperClass . '--video object, .' . $this->wrapperClass . '--video embed { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }';
+
+		return $out;
+	}
+
+
+	/**
+	 * Text formatting function as used by the Textformatter interface
+	 *
+	 */
+	public function format(&$str) {
+		
+		// extract urls
+		$urls = $this->essence->extract( $str );
+
+		if(!count($urls)) return;
+
+		foreach( $urls as $url ) {
+
+			$embedCode = $this->getEmbedCode( $url );
+			if(!$embedCode) continue;
+			$str = str_replace('<a href="' . $url . '">' . $url . '</a>', $embedCode, $str);
+			
+		}
+
+		if( $this->responsive || (isset($this->customCSS) && !empty($this->customCSS)) ) {
+			$str = '<style type="text/css">' . $this->addResponsiveVideoStyles() . $this->customCSS . '</style>' . $str;
+		}
+
+	}
+
+
+	/**
+	 * Module configuration screen
+	 *
+	 */
+	public static function getModuleConfigInputfields(array $data) {
+
+
+
+		foreach(self::$configDefaults as $key => $value) {
+			if(!isset($data[$key])) $data[$key] = $value;
+		}
+
+		unset($data['cacheClear']);
+		$inputfields = new InputfieldWrapper();
+
+		$f = wire('modules')->get('InputfieldText'); 
+		$f->attr('name', 'wrapperClass');
+		$f->attr('value', $data['wrapperClass']); 
+		$f->label = __('Name of CSS Wrapper Class'); 
+		$f->description = __('This class is added to the item container.'); 
+		$inputfields->add($f);
+
+
+		$f = wire('modules')->get('InputfieldTextarea'); 
+		$f->attr('name', 'customCSS');
+		$f->attr('value', $data['customCSS']); 
+		$f->label = __('Custom CSS'); 
+		$f->description = __('This CSS will be inserted as a <style> Tag before the content that is parsed. See the documentation for information about the available classes.'); 
+		$inputfields->add($f);
+
+		$f = wire('modules')->get('InputfieldInteger'); 
+		$f->attr('name', 'maxWidth');
+		$f->attr('value', $data['maxWidth']); 
+		$f->label = __('Max Width'); 
+		$inputfields->add($f); 
+
+		$f = wire('modules')->get('InputfieldInteger'); 
+		$f->attr('name', 'maxHeight');
+		$f->attr('value', $data['maxHeight']); 
+		$f->label = __('Max Height'); 
+		$inputfields->add($f); 
+
+		$f = wire('modules')->get('InputfieldTextarea'); 
+		$f->attr('name', 'customProviders');
+		$f->attr('value', $data['customProviders']); 
+		$f->label = __('Custom Providers JSON'); 
+		$f->description = __('Add custom Providers here. For information on how to add custom providers please refer to the documentation.'); 
+		$inputfields->add($f);
+
+		if(wire('input')->post('clearCache')) {
+			wire('db')->query("DELETE FROM " . self::dbTableName); 
+			wire('modules')->message(__('Cache has been cleared.')); 
+		} else {
+			$result = wire('db')->query("SELECT COUNT(*) FROM " . self::dbTableName); 
+			list($n) = $result->fetch_row();
+			$f = wire('modules')->get('InputfieldCheckbox');
+			$f->attr('name', 'clearCache'); 
+			$f->attr('value', 1); 
+			$f->label = __('Clear items cache?');
+			$f->description = __('This will clear out cached embed codes. There is no harm in doing this, other than that it will force them to be re-pulled from the Networks as needed.');
+			$f->notes = sprintf(__('There are currently %d item(s) cached'), $n);
+			$inputfields->add($f); 
+		}
+
+		return $inputfields; 
+
+	}
+
+	/**
+	 * Installation routine
+	 *
+	 */
+	public function ___install() {
+
+		if(!ini_get('allow_url_fopen')) {
+			throw new WireException("Your PHP has allow_url_fopen disabled, which is required by this module."); 
+		}
+
+		$sql =	"CREATE TABLE " . self::dbTableName . " (" . 
+				"item_id VARCHAR(255) NOT NULL PRIMARY KEY, " . 
+				"embed_code VARCHAR(1024) NOT NULL DEFAULT '', " . 
+				"item_service VARCHAR(255) NOT NULL DEFAULT '', " .
+				"item_type VARCHAR(255) NOT NULL DEFAULT '', " .
+				"created TIMESTAMP NOT NULL " . 
+				")";
+
+		wire('db')->query($sql);
+
+	}
+
+	/**
+	 * Uninstallation routine
+	 *
+	 */
+	public function ___uninstall() {
+		try { wire('db')->query("DROP TABLE " . self::dbTableName); } catch(Exception $e) { }
+	}
+
+
+	/**
+	 * The following functions are to support the ConfigurableModule interface
+	 * since Textformatter does not originate from WireData
+	 *
+	 */
+
+	public function set($key, $value) {
+		$this->data[$key] = $value; 
+		return $this;
+	}
+
+	public function get($key) {
+		$value = Wire::getFuel($key); 
+		if($value) return $value; 
+		return isset($this->data[$key]) ? $this->data[$key] : null;
+	}
+
+	public function __set($key, $value) {
+		$this->set($key, $value); 
+	}
+
+	public function __get($key) {
+		return $this->get($key);
+	}
+
+
+}
