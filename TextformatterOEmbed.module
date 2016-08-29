@@ -1,6 +1,6 @@
 <?php
 
-require_once 'lib/essence/bootstrap.php';
+require_once 'vendor/autoload.php';
 
 /**
  * ProcessWire Textformatter-oEmbed
@@ -24,9 +24,10 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 		
 		return array(
 			'title' => __('Textformatter OEmbed', __FILE__), 
-			'version' => 101, 
+			'version' => 200, 
 			'summary' => __('Enter a full Link (i.e <a href="https://twitter.com/neuwaerts_de/status/474431534124892160">https://twitter.com/neuwaerts_de/status/474431534124892160</a>) to a post or video at one of the supported services and it will automatically be converted to an embedded item. This formatter is intended to be run on trusted input.', __FILE__),
 			'author' => 'Felix Wahner',
+			'requires' => array('PHP>=5.5.0'),
 			'href' => 'http://modules.processwire.com/modules/textformatter-oembed/'
 		);
 
@@ -89,13 +90,10 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 
 		$this->loadProviders();
 
-		if(!$this->providers) {
-			throw new WireException("Providers couldn't be read. Maybe there are files missing?"); 
-		}
 		if( !$this->providers ) {
-			$this->essence = Essence\Essence::instance();
+			$this->essence = new \Essence\Essence();
 		} else {
-			$this->essence = Essence\Essence::instance($this->providers);
+			$this->essence = new \Essence\Essence($this->providers);
 		}
 
     }
@@ -120,12 +118,10 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 		$result = $db->query("SELECT embed_code, item_service, item_type FROM " . self::dbTableName . " WHERE item_id='$itemID'"); 
 
 		if($result->num_rows) {
-
-			list($embedCode,$itemService,$itemType) = $result->fetch_row(); 
-
+			list($embedCode, $itemService, $itemType) = $result->fetch_row(); 
 		} else {
 
-			$embed = $this->essence->embed( $url , [
+			$embed = $this->essence->extract( $url , [
 			    'maxwidth' => $this->maxWidth,
 			    'maxheight' => $this->maxHeight
 			]);
@@ -164,23 +160,34 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 
 	protected function loadProviders() {
 
-		if ( !is_string( ESSENCE_DEFAULT_PROVIDERS ) || !file_exists( ESSENCE_DEFAULT_PROVIDERS )) return;
+		$retVal = [];
 
-		$tmpProviders = include ESSENCE_DEFAULT_PROVIDERS;
-
-		if(!is_array($tmpProviders)) return;
-		
-		$addedProviders = (array)json_decode($this->customProviders, true);
-		
-		if(!count($addedProviders)) return $this->providers = [ 'providers' => $tmpProviders ];
-
-		foreach( $addedProviders as $provider => $providerObj ) {
-			$tmpProviders = array_merge($tmpProviders, $providerObj);
+		try {
+			$addedProviders = (array)json_decode($this->customProviders, true);
+		} catch(\Error $e) {
+			//
+		}
+		if(isset($addedProviders) && is_array($addedProviders) && count($addedProviders)) {
+			$retVal['filters'] = [];
+			foreach ($addedProviders as $key => $value) {
+				if(array_key_exists($key, $retVal)) continue;
+				try {
+					$retVal[$key] = \Essence\Container::unique(function($C) {
+				        return $C->get('OEmbedProvider')->setEndpoint(
+				            str_replace('%s', ':url', $value['endpoint'])
+				        );
+			    	});
+			    	$retVal['filters'][$key] = $value['filter'];
+		    	} catch(\Error $e) {
+		    		continue;
+		    	}
+			}
 		}
 
-		return $this->providers = [ 'providers' => $tmpProviders ];
+	    return $retVal;
 
 	}
+
 
 	/**
 	 * Adds a Wrapper with BEM-style classes to the embed code
@@ -223,7 +230,7 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 	public function format(&$str) {
 		
 		// extract urls
-		$urls = $this->essence->extract( $str );
+		$urls = $this->essence->crawl( $str );
 
 		if(!count($urls)) return;
 
@@ -232,12 +239,13 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 			$embedCode = $this->getEmbedCode( $url );
 			if(!$embedCode) continue;
 			$str = str_replace('<a href="' . $url . '">' . $url . '</a>', $embedCode, $str);
+
 			
 		}
 
 		if( $this->responsive || (isset($this->customCSS) && !empty($this->customCSS)) ) {
 			$str = '<style type="text/css">' . $this->addResponsiveVideoStyles() . $this->customCSS . '</style>' . $str;
-		}
+		}	
 
 	}
 
