@@ -228,7 +228,10 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 	 *
 	 */
 	public function format(&$str) {
-		
+
+		// skip empty fields
+		if( $str === "") return;
+
 		// extract urls
 		$urls = $this->essence->crawl( $str );
 
