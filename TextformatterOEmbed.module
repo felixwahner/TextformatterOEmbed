@@ -1,6 +1,8 @@
 <?php
 
-require_once 'vendor/autoload.php';
+// Don't compile included libraries
+// http://processwire.com/blog/posts/processwire-3.0.43-core-updates/#new-filecompiler-options
+require_once(/*NoCompile*/__DIR__ . '/vendor/autoload.php');
 
 /**
  * ProcessWire Textformatter-oEmbed
