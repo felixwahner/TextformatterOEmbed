@@ -122,11 +122,14 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 		if($result->num_rows) {
 			list($embedCode, $itemService, $itemType) = $result->fetch_row(); 
 		} else {
-
 			$embed = $this->essence->extract( $url , [
 			    'maxwidth' => $this->maxWidth,
 			    'maxheight' => $this->maxHeight
 			]);
+
+			if ($embed === NULL){
+			     return;
+			}
 
 			$embedCode = $embed->html;
 
