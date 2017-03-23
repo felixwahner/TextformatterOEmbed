@@ -26,7 +26,7 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 		
 		return array(
 			'title' => __('Textformatter OEmbed', __FILE__), 
-			'version' => 201, 
+			'version' => 202, 
 			'summary' => __('Enter a full Link (i.e <a href="https://twitter.com/neuwaerts_de/status/474431534124892160">https://twitter.com/neuwaerts_de/status/474431534124892160</a>) to a post or video at one of the supported services and it will automatically be converted to an embedded item. This formatter is intended to be run on trusted input.', __FILE__),
 			'author' => 'Felix Wahner',
 			'requires' => array('PHP>=5.5.0'),
