@@ -30,6 +30,7 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 			'summary' => __('Enter a full Link (i.e <a href="https://twitter.com/neuwaerts_de/status/474431534124892160">https://twitter.com/neuwaerts_de/status/474431534124892160</a>) to a post or video at one of the supported services and it will automatically be converted to an embedded item. This formatter is intended to be run on trusted input.', __FILE__),
 			'author' => 'Felix Wahner',
 			'requires' => array('PHP>=5.5.0'),
+			'singular' => true,
 			'href' => 'http://modules.processwire.com/modules/textformatter-oembed/'
 		);
 
@@ -69,6 +70,12 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 	 *
 	 */
 	 protected $providers = null;	
+	 
+	/**
+	 * only load providers once
+	 *
+	 */
+	protected $providersLoaded = false;
 
 
 	/**
@@ -82,23 +89,6 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 		}
 		
 	}
-
-
-	/**
-	 * Set our configuration defaults, initalize Essence Library
-	 *
-	 */	
-    public function init() {
-
-		$this->loadProviders();
-
-		if( !$this->providers ) {
-			$this->essence = new \Essence\Essence();
-		} else {
-			$this->essence = new \Essence\Essence($this->providers);
-		}
-
-    }
 
 	/**
 	 * 	Given an url return the corresponding embed code.
@@ -230,30 +220,52 @@ class TextformatterOEmbed extends Textformatter implements ConfigurableModule {
 
 	/**
 	 * Text formatting function as used by the Textformatter interface
+	 * @param Page $page
+ 	 * @param Field $field
+	 * @param mixed $str
 	 *
 	 */
-	public function format(&$str) {
+	public function formatValue(Page $page, Field $field, &$str)
 
 		// skip empty fields
-		if( $str === "") return;
-
-		// extract urls
-		$urls = $this->essence->crawl( $str );
-
-		if(!count($urls)) return;
-
-		foreach( $urls as $url ) {
-
-			$embedCode = $this->getEmbedCode( $url );
-			if(!$embedCode) continue;
-			$str = str_replace('<a href="' . $url . '">' . $url . '</a>', $embedCode, $str);
-
-			
+		if ($str === '') {
+			return;
 		}
 
-		if( $this->responsive || (isset($this->customCSS) && !empty($this->customCSS)) ) {
-			$str = '<style type="text/css">' . $this->addResponsiveVideoStyles() . $this->customCSS . '</style>' . $str;
-		}	
+		$str = $this->cache->get('TextformatterOEmbed-'.$page->id.$field->name, $page, function () use ($str) {
+
+			if (!$this->providersLoaded) {
+				$this->loadProviders();
+
+				if (!$this->providers) {
+					$this->essence = new \Essence\Essence();
+				} else {
+					$this->essence = new \Essence\Essence($this->providers);
+				}
+				$this->providersLoaded = true;
+			}
+
+			// extract urls
+			$urls = $this->essence->crawl($str);
+
+			if (!count($urls)) {
+				return $str;
+			}
+
+			foreach ($urls as $url) {
+				$embedCode = $this->getEmbedCode($url);
+				if (!$embedCode) {
+					continue;
+				}
+				$str = str_replace('<a href="'.$url.'">'.$url.'</a>', $embedCode, $str);
+			}
+
+			if ($this->responsive || (isset($this->customCSS) && !empty($this->customCSS))) {
+				$str = '<style type="text/css">'.$this->addResponsiveVideoStyles().$this->customCSS.'</style>'.$str;
+			}
+
+			return $str;
+		});	
 
 	}
 
